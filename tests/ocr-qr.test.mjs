@@ -13,7 +13,7 @@ test('OCR proxy uses verified QR identity instead of a wrong manual selection',a
  await new Promise(r=>ocr.listen(0,'127.0.0.1',r));const ocrPort=ocr.address().port;t.after(()=>new Promise(r=>ocr.close(r)));
  const allocator=net.createServer();await new Promise(r=>allocator.listen(0,'127.0.0.1',r));const port=allocator.address().port;await new Promise(r=>allocator.close(r));
  const temp=await mkdtemp(path.join(tmpdir(),'qr-ocr-'));const root=fileURLToPath(new URL('..',import.meta.url));
- const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),OPENAI_API_KEY:'',THINKMATE_DATA_DIR:temp,OCR_BACKEND_URL:`http://127.0.0.1:${ocrPort}`},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),OPENAI_API_KEY:'',BAZE_API_KEY:'',AI_PROVIDER:'openai',THINKMATE_DATA_DIR:temp,OCR_BACKEND_URL:`http://127.0.0.1:${ocrPort}`},windowsHide:true,stdio:['ignore','pipe','pipe']});
  t.after(async()=>{if(child.exitCode===null){const closed=new Promise(r=>child.once('exit',r));child.kill();await closed}await rm(temp,{recursive:true,force:true})});
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);child.stdout.on('data',d=>{if(d.toString().includes('SQLite ready')){clearTimeout(timer);resolve()}});child.once('exit',c=>{if(c){clearTimeout(timer);reject(Error('Server exit '+c))}})});
  const base=`http://localhost:${port}`;const identity=await fetch(base+'/api/teacher/me'),cookie=identity.headers.get('set-cookie').split(';')[0];
