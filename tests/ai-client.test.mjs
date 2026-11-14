@@ -8,6 +8,12 @@ test('BAZE key selects BAZE defaults while explicit OpenAI stays isolated',()=>{
  assert.equal(settings.provider,'openai');assert.equal(settings.key,'openai-test');
  assert.throws(()=>aiSettings({AI_PROVIDER:'unknown'}),/AI_PROVIDER/);
 });
+test('website BAZE key takes precedence over inherited Codex key',()=>{
+ const env={BAZE_API_KEY:'shared-agent-key',THINKMATE_BAZE_API_KEY:'website-only-key'};
+ assert.equal(aiSettings(env).provider,'baze');assert.equal(aiSettings(env).key,'website-only-key');
+ assert.equal(env.BAZE_API_KEY,'shared-agent-key');
+ assert.equal(aiSettings({...env,AI_PROVIDER:'openai',OPENAI_API_KEY:'openai-test'}).key,'openai-test');
+});
 test('BAZE Responses and embeddings use fixed gateway URLs and prohibit redirects',async()=>{
  for(const route of ['responses','embeddings']){
   const data=await requestAi({provider:'baze',key:'test-secret'},route,{model:'test-model'},async(url,options)=>{

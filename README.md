@@ -19,7 +19,7 @@ npm start
 
 ## AI와 RAG 함께 연결하기
 
-BAZE 연결을 지원합니다. 기본 대화 모델은 `gpt-5.6-sol`, 임베딩 모델은 `text-embedding-3-small`입니다. 서버 환경변수에 `BAZE_API_KEY`가 있으면 자동으로 BAZE를 선택합니다. `.env`에서는 `AI_PROVIDER=baze`, `BAZE_MODEL`, `BAZE_EMBEDDING_MODEL`을 설정할 수 있습니다. `AI_PROVIDER=openai`로 지정하면 기존 OpenAI 연결을 사용하며 서비스별 키를 구분합니다.
+BAZE 연결을 지원합니다. 기본 대화 모델은 `gpt-5.6-sol`, 임베딩 모델은 `text-embedding-3-small`입니다. 웹앱 전용 키는 `.env`의 `THINKMATE_BAZE_API_KEY`에 저장하며 공용 `BAZE_API_KEY`보다 우선합니다. Codex 앱과 다른 키를 사용해도 Windows 사용자 환경변수나 Codex 설정을 수정하지 않습니다. 전용 키가 없으면 서버 환경변수 `BAZE_API_KEY`를 사용할 수 있습니다. `.env`에서는 `AI_PROVIDER=baze`, `BAZE_MODEL`, `BAZE_EMBEDDING_MODEL`을 설정할 수 있습니다. `AI_PROVIDER=openai`로 지정하면 기존 OpenAI 연결을 사용하며 서비스별 키를 구분합니다.
 
 1. 서버 실행 후 교사 사이트의 `API 연결` 화면(`/teacher?view=settings`)을 엽니다.
 2. **BAZE API Gateway** 또는 **OpenAI**를 선택하고 해당 서비스의 API 키와 GPT·임베딩 모델을 입력한 뒤 **연결 검증 및 RAG 적용**을 누릅니다. 같은 서비스의 서버 키가 이미 설정되어 있으면 키 입력을 비워둘 수 있습니다. 검증한 키는 서버 `.env`에 저장하며 브라우저·학급 DB·로그에 반환하지 않습니다.

@@ -1,12 +1,12 @@
 export const providers={
- baze:{name:'BAZE',baseUrl:'https://api.baze.co/v1/gateway',model:'gpt-5.6-sol',keyVariable:'BAZE_API_KEY',modelVariable:'BAZE_MODEL',embeddingVariable:'BAZE_EMBEDDING_MODEL'},
+ baze:{name:'BAZE',baseUrl:'https://api.baze.co/v1/gateway',model:'gpt-5.6-sol',keyVariable:'BAZE_API_KEY',websiteKeyVariable:'THINKMATE_BAZE_API_KEY',modelVariable:'BAZE_MODEL',embeddingVariable:'BAZE_EMBEDDING_MODEL'},
  openai:{name:'OpenAI',baseUrl:'https://api.openai.com/v1',model:'gpt-4.1-mini',keyVariable:'OPENAI_API_KEY',modelVariable:'OPENAI_MODEL',embeddingVariable:'OPENAI_EMBEDDING_MODEL'}
 };
 
 export function aiSettings(env=process.env){
- const provider=env.AI_PROVIDER||(env.BAZE_API_KEY?'baze':'openai'),p=providers[provider];
+ const provider=env.AI_PROVIDER||((env.THINKMATE_BAZE_API_KEY||env.BAZE_API_KEY)?'baze':'openai'),p=providers[provider];
  if(!p)throw new Error('AI_PROVIDER는 baze 또는 openai여야 합니다.');
- return {provider,key:env[p.keyVariable]||'',model:env[p.modelVariable]||p.model,embeddingModel:env[p.embeddingVariable]||'text-embedding-3-small'};
+ return {provider,key:(p.websiteKeyVariable&&env[p.websiteKeyVariable])||env[p.keyVariable]||'',model:env[p.modelVariable]||p.model,embeddingModel:env[p.embeddingVariable]||'text-embedding-3-small'};
 }
 
 export async function requestAi(settings,route,payload,fetchImpl=fetch){

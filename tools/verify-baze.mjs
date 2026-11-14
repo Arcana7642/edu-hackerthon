@@ -1,16 +1,19 @@
 // Explicit live verification only; uses an isolated database and bills the configured BAZE account.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {parseEnv} from 'node:util';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
 import {fileURLToPath} from 'node:url';
 
-if(!process.env.BAZE_API_KEY)throw Error('BAZE_API_KEY is required.');
+const websiteEnv=parseEnv(await readFile(new URL('../.env',import.meta.url),'utf8').catch(()=>''));
+const websiteKey=process.env.THINKMATE_BAZE_API_KEY||websiteEnv.THINKMATE_BAZE_API_KEY||process.env.BAZE_API_KEY;
+if(!websiteKey)throw Error('THINKMATE_BAZE_API_KEY or BAZE_API_KEY is required.');
 const root=fileURLToPath(new URL('..',import.meta.url)),dir=await mkdtemp(path.join(tmpdir(),'thinkmate-baze-'));
 const allocator=net.createServer();await new Promise(r=>allocator.listen(0,'127.0.0.1',r));const port=allocator.address().port;await new Promise(r=>allocator.close(r));
-const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,AI_PROVIDER:'baze',BAZE_MODEL:'gpt-5.6-sol',PORT:String(port),THINKMATE_DATA_DIR:dir},windowsHide:true,stdio:['ignore','pipe','pipe']});
+const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,THINKMATE_BAZE_API_KEY:websiteKey,AI_PROVIDER:'baze',BAZE_MODEL:'gpt-5.6-sol',PORT:String(port),THINKMATE_DATA_DIR:dir},windowsHide:true,stdio:['ignore','pipe','pipe']});
 let cookie='';
 try{
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Startup timeout')),15000);child.stdout.on('data',d=>{if(d.toString().includes('SQLite ready')){clearTimeout(timer);resolve()}});child.once('error',reject);child.once('exit',()=>{clearTimeout(timer);reject(Error('Server exited'))})});

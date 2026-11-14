@@ -42,7 +42,7 @@ const retrieve=(classId,query,materialId)=>rag.search(classId,query,materialId,5
 function event(kind,b,payload){sql.prepare('INSERT INTO events(id,class_id,student_id,kind,payload) VALUES(?,?,?,?,?)').run(randomUUID(),String(b.classId||''),String(b.studentId||''),kind,JSON.stringify(payload))}
 const platform=createPlatform({sql,json,body,llm,retrieve,key:()=>!!key,origin,seed:createDemoState,onMaterialsChanged:state=>rag.sync(state)});
 rag.sync(platform.load());
-async function persistAi(){const p=providers[provider],names=['AI_PROVIDER',p.keyVariable,p.modelVariable,p.embeddingVariable];let env=await readFile(path.join(root,'.env'),'utf8').catch(()=> '');env=env.split(/\r?\n/).filter(line=>!names.some(name=>new RegExp('^\\s*'+name+'=').test(line))).join('\n').trim();env+='\nAI_PROVIDER='+provider+'\n'+p.keyVariable+'='+key+'\n'+p.modelVariable+'='+model+'\n'+p.embeddingVariable+'='+embeddingModel+'\n';const target=path.join(root,'.env');await writeFile(target+'.tmp',env,{mode:0o600});await rename(target+'.tmp',target)}
+async function persistAi(){const p=providers[provider],keyName=p.websiteKeyVariable||p.keyVariable,names=['AI_PROVIDER',keyName,p.keyVariable,p.modelVariable,p.embeddingVariable];let env=await readFile(path.join(root,'.env'),'utf8').catch(()=> '');env=env.split(/\r?\n/).filter(line=>!names.some(name=>new RegExp('^\\s*'+name+'=').test(line))).join('\n').trim();env+='\nAI_PROVIDER='+provider+'\n'+keyName+'='+key+'\n'+p.modelVariable+'='+model+'\n'+p.embeddingVariable+'='+embeddingModel+'\n';const target=path.join(root,'.env');await writeFile(target+'.tmp',env,{mode:0o600});await rename(target+'.tmp',target)}
 
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,origin);
@@ -67,7 +67,7 @@ const server=http.createServer(async(req,res)=>{try{
   if(url.pathname.endsWith('/rag/search')){rag.sync(state);return json(res,200,{results:await rag.search(selected,b.query,b.materialId,Number(b.limit)||5),rag:rag.status(selected)})}
   if(url.pathname.endsWith('/rag/reindex')){rag.sync(state);return json(res,200,{rag:await rag.indexVectors(selected,b.materialId),configured:!!key})}
   const nextProvider=String(b.provider||provider);if(!providers[nextProvider])throw new Error('BAZE 또는 OpenAI를 선택하세요.');
-  const candidate=String(b.key||(nextProvider===provider?key:process.env[providers[nextProvider].keyVariable])||'').trim();const nextModel=String(b.model||(nextProvider===provider?model:providers[nextProvider].model)).trim(),nextEmbedding=String(b.embeddingModel||embeddingModel).trim();
+  const candidate=String(b.key||(nextProvider===provider?key:(process.env[providers[nextProvider].websiteKeyVariable]||process.env[providers[nextProvider].keyVariable]))||'').trim();const nextModel=String(b.model||(nextProvider===provider?model:providers[nextProvider].model)).trim(),nextEmbedding=String(b.embeddingModel||embeddingModel).trim();
   if(!candidate)return json(res,400,{error:'선택한 서비스의 API 키가 필요합니다.'});
   if(candidate.length>1000||/[\r\n\0]/.test(candidate)||![nextModel,nextEmbedding].every(v=>/^[a-zA-Z0-9._:-]+$/.test(v)))throw new Error('API 키 또는 모델 형식을 확인하세요.');
   const previous={provider,key,model,embeddingModel};provider=nextProvider;key=candidate;model=nextModel;embeddingModel=nextEmbedding;
