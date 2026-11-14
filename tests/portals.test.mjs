@@ -11,7 +11,7 @@ test('two portals share backend while keeping student data and assessment keys p
  const root=fileURLToPath(new URL('..',import.meta.url));
  const temp=await mkdtemp(path.join(tmpdir(),'thinkmate-test-'));
  const allocator=net.createServer();await new Promise(r=>allocator.listen(0,'127.0.0.1',r));const port=allocator.address().port;await new Promise(r=>allocator.close(r));
- let child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),THINKMATE_DATA_DIR:temp,TEACHER_PASSWORD:'integration-teacher',OPENAI_API_KEY:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ let child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),THINKMATE_DATA_DIR:temp,TEACHER_PASSWORD:'integration-teacher',OPENAI_API_KEY:'',BAZE_API_KEY:'',AI_PROVIDER:'openai'},windowsHide:true,stdio:['ignore','pipe','pipe']});
  t.after(async()=>{if(child.exitCode===null){const ended=new Promise(r=>child.once('exit',r));child.kill();await ended;}await rm(temp,{recursive:true,force:true})});
  await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Server startup timeout')),15000);child.stdout.on('data',data=>{if(data.toString().includes('SQLite ready')){clearTimeout(timeout);resolve()}});child.once('error',reject);child.once('exit',code=>{if(code)reject(Error('Server exited '+code))})});
  const base=`http://localhost:${port}`;
@@ -77,7 +77,7 @@ test('two portals share backend while keeping student data and assessment keys p
  assert.equal((await call('/api/teacher/rag/search',{method:'POST',cookie:student,body:{query:'밀도'}})).status,401);
  assert.equal((await call('/api/teacher/ai/connect',{method:'POST',cookie:teacher,body:{key:''}})).status,400);
  const stopped=new Promise(r=>child.once('exit',r));child.kill();await stopped;
- child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),THINKMATE_DATA_DIR:temp,TEACHER_PASSWORD:'integration-teacher',OPENAI_API_KEY:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),THINKMATE_DATA_DIR:temp,TEACHER_PASSWORD:'integration-teacher',OPENAI_API_KEY:'',BAZE_API_KEY:'',AI_PROVIDER:'openai'},windowsHide:true,stdio:['ignore','pipe','pipe']});
  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Restart timeout')),10000);child.stdout.on('data',data=>{if(data.toString().includes('SQLite ready')){clearTimeout(timer);resolve()}});child.once('exit',code=>{if(code){clearTimeout(timer);reject(Error('Restart failed '+code))}})});
  assert.equal((await call('/api/teacher/state',{cookie:teacher})).data.state.sessions.s1.verification.correct,true);
 

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
-    "check": "node --check server.mjs && node --check platform.mjs && node --check dist/app.js && node --check dist/student.js && node --check dist/teacher-entry.js && node --check rag.mjs && node --check worksheet-qr.mjs && node --check dist/qr-scanner.js && node --check dist/material-viewer.js && node --check dist/demo-questions.js && node --check dist/tf-utils.js",
+    "check": "node --check server.mjs && node --check ai-client.mjs && node --check ai-grading.mjs && node --check platform.mjs && node --check dist/app.js && node --check dist/student.js && node --check dist/teacher-entry.js && node --check rag.mjs && node --check worksheet-qr.mjs && node --check dist/qr-scanner.js && node --check dist/material-viewer.js && node --check dist/demo-questions.js && node --check dist/tf-utils.js",
     "test": "node --test tests/*.test.mjs"
   },
   "engines": {

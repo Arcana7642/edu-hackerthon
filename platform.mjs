@@ -1,5 +1,6 @@
 import {randomBytes,createHash,scryptSync,timingSafeEqual,randomUUID} from 'node:crypto';
 import {isTF,validateTFResponse,formatTF,gradeTF} from './dist/tf-utils.js';
+import {gradeAnswers} from './ai-grading.mjs';
 
 // Local prototype identity and role checks. The two portals never share a state API.
 export function createPlatform({sql,json,body,llm,retrieve,key,origin,seed,onMaterialsChanged=()=>{}}){
@@ -94,10 +95,16 @@ export function createPlatform({sql,json,body,llm,retrieve,key,origin,seed,onMat
     const correct=q.type==='서술형'?null:norm(answer)===norm(q.answer);
     return {questionId:q.id,answer,correct,reason:correct===null?'추가 확인 필요':correct?'':'개념 부족 추정'};
    })}catch(e){json(res,400,{error:e.message});return true}
-   const result={id:randomUUID(),classId:student.classId,studentId:student.id,worksheetId:w.id,source:'student-web',date:new Date().toISOString(),items};
-   state.results=state.results.filter(r=>!(r.studentId===student.id&&r.worksheetId===w.id));state.results.push(result);
-   delete state.learningSessions?.[sessionKey(student.id,w.id)];if(state.sessions?.[student.id]?.worksheetId===w.id)delete state.sessions[student.id];
-   write(state,true);json(res,200,{ok:true,correctCount:items.filter(i=>i.correct===true).length,pendingCount:items.filter(i=>i.correct===null).length,total:items.length});return true;
+   const lock=student.id+':'+w.id;if(locks.has(lock)){json(res,409,{error:'이전 답안을 처리하고 있습니다.'});return true}locks.add(lock);
+   try{
+    const ai=hasKey();if(ai)items=await gradeAnswers(llm,w.questions,items);
+    const latest=load(),current=latest.worksheets.find(x=>x.id===w.id&&x.classId===student.classId);
+    if(!identity(latest,student.id)||JSON.stringify(current)!==JSON.stringify(w))throw new Error('학습지가 변경되었습니다. 새로 불러온 뒤 제출하세요.');
+    const result={id:randomUUID(),classId:student.classId,studentId:student.id,worksheetId:w.id,source:'student-web',gradingMode:ai?'ai':'local',date:new Date().toISOString(),items};
+    latest.results=latest.results.filter(r=>!(r.studentId===student.id&&r.worksheetId===w.id));latest.results.push(result);
+    delete latest.learningSessions?.[sessionKey(student.id,w.id)];if(latest.sessions?.[student.id]?.worksheetId===w.id)delete latest.sessions[student.id];
+    write(latest,true);json(res,200,{ok:true,gradingMode:result.gradingMode,correctCount:items.filter(i=>i.correct===true).length,pendingCount:items.filter(i=>i.correct===null).length,total:items.length});return true;
+   }finally{locks.delete(lock)}
   }
   if(!['sessions/start','sessions/turn','sessions/verify'].includes(action)||req.method!=='POST'){json(res,404,{error:'학생용 API를 찾을 수 없습니다.'});return true}
   const b=JSON.parse((await body(req)).toString('utf8'));

@@ -10,3 +10,14 @@ test('material and class boundaries are preserved',async()=>{const {sql,rag}=fix
 test('changed content replaces stale chunks and removed documents disappear',()=>{const {sql,rag}=fixture();rag.sync(state);const first=rag.status().chunkCount;rag.sync(state);assert.equal(rag.status().chunkCount,first);rag.sync({materials:[{...state.materials[0],text:'[3쪽]\n새로운 판막 설명'}]});assert.equal(rag.status().documentCount,1);assert.equal(sql.prepare('SELECT page FROM rag_chunks').get().page,3);assert.equal(sql.prepare('SELECT COUNT(*) n FROM rag_chunks WHERE text LIKE ?').get('%우리은하%').n,0);sql.close()});
 test('optional embeddings persist and hybrid search uses matching model',async()=>{let calls=0;const {sql,rag}=fixture({hasKey:()=>true,embed:async texts=>{calls++;return texts.map(t=>t.includes('심')?[1,0]:[0,1])}});rag.sync(state);await rag.indexVectors('c1');assert.equal(rag.status('c1').embeddedCount,rag.status('c1').chunkCount);const previous=calls;await rag.indexVectors('c1');assert.equal(calls,previous);const hits=await rag.search('c1','심실');assert.equal(hits[0].materialId,'heart');assert.equal(hits[0].method,'hybrid');sql.close()});
 test('embedding failures do not mark documents as embedded',async()=>{const {sql,rag}=fixture({hasKey:()=>true});rag.sync(state);await assert.rejects(()=>rag.indexVectors('c1'),/No API expected/);assert.equal(rag.status('c1').embeddedCount,0);sql.close()});
+
+test('concurrent indexing for different classes embeds both scopes',async()=>{
+ const {sql,rag}=fixture({hasKey:()=>true,embed:async texts=>{await new Promise(resolve=>setImmediate(resolve));return texts.map(()=>[1,0])}});
+ rag.sync(state);await Promise.all([rag.indexVectors('c1'),rag.indexVectors('c2')]);
+ for(const id of ['c1','c2'])assert.equal(rag.status(id).embeddedCount,rag.status(id).chunkCount);
+ sql.close();
+});
+test('invalid query embeddings fail clearly without returning misleading search results',async()=>{
+ const {sql,rag}=fixture({hasKey:()=>true,embed:async texts=>texts.map(t=>t==='심실'?[]:[1,0])});rag.sync(state);
+ await assert.rejects(()=>rag.search('c1','심실'),/검색어 임베딩/);sql.close();
+});

@@ -2,6 +2,8 @@ import http from 'node:http';
 import {createWorksheetQR,identifyWorksheet} from './worksheet-qr.mjs';
 import {createRag} from './rag.mjs';
 import {createPlatform} from './platform.mjs';
+import {gradeAnswers} from './ai-grading.mjs';
+import {aiSettings,providers,requestAi} from './ai-client.mjs';
 import {createDemoState} from './demo-data.mjs';
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
@@ -24,14 +26,12 @@ sql.exec(`PRAGMA journal_mode=WAL;
  CREATE TABLE IF NOT EXISTS results(id TEXT PRIMARY KEY,class_id TEXT NOT NULL,student_id TEXT NOT NULL,payload TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS sessions(student_id TEXT PRIMARY KEY,payload TEXT NOT NULL);`);
 const port=Number(process.env.PORT||4173);
-let key=process.env.OPENAI_API_KEY||'';
+let {provider,key,model,embeddingModel}=aiSettings();
 let verifiedAt=null;
 const origin=`http://localhost:${port}`;
-let model=process.env.OPENAI_MODEL||'gpt-4.1-mini';
-let embeddingModel=process.env.OPENAI_EMBEDDING_MODEL||'text-embedding-3-small';
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data))};
 async function body(req){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>12*1024*1024)throw new Error('업로드는 10MB 이하로 제한됩니다.');chunks.push(chunk)}return Buffer.concat(chunks)}
-async function openai(route,payload){if(!key)throw new Error('서버 .env에 OPENAI_API_KEY를 설정해 주세요.');const r=await fetch('https://api.openai.com/v1/'+route,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${key}`},body:JSON.stringify(payload),signal:AbortSignal.timeout(90000)});if(!r.ok){const e=await r.json().catch(()=>({}));console.error('OpenAI request failed:',r.status,e.error?.code||'unknown');throw new Error(`AI 요청 실패 (${r.status}). API 키·사용 가능 모델·사용 한도를 확인해 주세요.`)}return r.json()}
+const openai=(route,payload)=>requestAi({provider,key},route,payload);
 function objectSchema(properties){return {type:'object',properties,required:Object.keys(properties),additionalProperties:false}}
 const str={type:'string'};
 const qSchema=objectSchema({id:str,type:{type:'string',enum:['3지선다','단답형','서술형','빈칸 넣기','T/F']},concept:str,text:str,options:{type:'array',items:str},answer:str,rubric:str,wrongPart:str,correction:str});
@@ -42,14 +42,14 @@ const retrieve=(classId,query,materialId)=>rag.search(classId,query,materialId,5
 function event(kind,b,payload){sql.prepare('INSERT INTO events(id,class_id,student_id,kind,payload) VALUES(?,?,?,?,?)').run(randomUUID(),String(b.classId||''),String(b.studentId||''),kind,JSON.stringify(payload))}
 const platform=createPlatform({sql,json,body,llm,retrieve,key:()=>!!key,origin,seed:createDemoState,onMaterialsChanged:state=>rag.sync(state)});
 rag.sync(platform.load());
-async function persistAi(){let env=await readFile(path.join(root,'.env'),'utf8').catch(()=> '');env=env.split(/\r?\n/).filter(line=>!/^\s*(OPENAI_API_KEY|OPENAI_MODEL|OPENAI_EMBEDDING_MODEL)=/.test(line)).join('\n').trim();env+='\nOPENAI_API_KEY='+key+'\nOPENAI_MODEL='+model+'\nOPENAI_EMBEDDING_MODEL='+embeddingModel+'\n';const target=path.join(root,'.env');await writeFile(target+'.tmp',env,{mode:0o600});await rename(target+'.tmp',target)}
+async function persistAi(){const p=providers[provider],keyName=p.websiteKeyVariable||p.keyVariable,names=['AI_PROVIDER',keyName,p.keyVariable,p.modelVariable,p.embeddingVariable];let env=await readFile(path.join(root,'.env'),'utf8').catch(()=> '');env=env.split(/\r?\n/).filter(line=>!names.some(name=>new RegExp('^\\s*'+name+'=').test(line))).join('\n').trim();env+='\nAI_PROVIDER='+provider+'\n'+keyName+'='+key+'\n'+p.modelVariable+'='+model+'\n'+p.embeddingVariable+'='+embeddingModel+'\n';const target=path.join(root,'.env');await writeFile(target+'.tmp',env,{mode:0o600});await rename(target+'.tmp',target)}
 
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,origin);
  // This development server deliberately binds to loopback. It has no production identity system.
  const allowed=new Set([origin,`http://127.0.0.1:${port}`]);
  if(req.headers.origin&&!allowed.has(req.headers.origin))return json(res,403,{error:'로컬 개발 서버는 같은 출처의 요청만 허용합니다.'});
- if(url.pathname==='/api/health')return json(res,200,{ok:true,aiConfigured:!!key,ocrConfigured:!!process.env.OCR_BACKEND_URL,storage:'sqlite',mode:'local-development',rag:rag.status()});
+ if(url.pathname==='/api/health')return json(res,200,{ok:true,aiConfigured:!!key,provider,model,ocrConfigured:!!process.env.OCR_BACKEND_URL,storage:'sqlite',mode:'local-development',rag:rag.status()});
  if(url.pathname==='/api/teacher/material-file'&&req.method==='GET'){
   if(!platform.auth(req,'teacher'))return json(res,401,{error:'교사 화면에서 자료를 열어 주세요.'});
   const material=platform.load().materials.find(m=>m.id===url.searchParams.get('id'));
@@ -59,20 +59,21 @@ const server=http.createServer(async(req,res)=>{try{
  if(['/api/teacher/rag/status','/api/teacher/rag/search','/api/teacher/rag/reindex','/api/teacher/ai/status','/api/teacher/ai/connect'].includes(url.pathname)){
   if(!platform.auth(req,'teacher'))return json(res,401,{error:'교사 화면에서 접속해 주세요.'});
   const state=platform.load();const classId=url.searchParams.get('classId')||state.classId;
-  if(req.method==='GET'&&url.pathname.endsWith('/status'))return json(res,200,{configured:!!key,verifiedAt,model,embeddingModel,rag:rag.status(classId)});
+  if(req.method==='GET'&&url.pathname.endsWith('/status'))return json(res,200,{configured:!!key,provider,baseUrl:providers[provider].baseUrl,verifiedAt,model,embeddingModel,rag:rag.status(classId)});
   if(req.method!=='POST')return json(res,405,{error:'POST 요청이 필요합니다.'});
   const b=JSON.parse((await body(req)).toString('utf8'));const selected=b.classId||classId;
   if(!state.classes.some(c=>c.id===selected))return json(res,404,{error:'반을 찾을 수 없습니다.'});
   if(b.materialId&&!state.materials.some(m=>m.id===b.materialId&&m.classId===selected))return json(res,403,{error:'해당 반의 자료만 검색할 수 있습니다.'});
   if(url.pathname.endsWith('/rag/search')){rag.sync(state);return json(res,200,{results:await rag.search(selected,b.query,b.materialId,Number(b.limit)||5),rag:rag.status(selected)})}
   if(url.pathname.endsWith('/rag/reindex')){rag.sync(state);return json(res,200,{rag:await rag.indexVectors(selected,b.materialId),configured:!!key})}
-  const candidate=String(b.key||key).trim();const nextModel=String(b.model||model).trim(),nextEmbedding=String(b.embeddingModel||embeddingModel).trim();
-  if(!candidate)return json(res,400,{error:'OpenAI API 키가 필요합니다. 키를 발급한 뒤 입력하세요.'});
+  const nextProvider=String(b.provider||provider);if(!providers[nextProvider])throw new Error('BAZE 또는 OpenAI를 선택하세요.');
+  const candidate=String(b.key||(nextProvider===provider?key:(process.env[providers[nextProvider].websiteKeyVariable]||process.env[providers[nextProvider].keyVariable]))||'').trim();const nextModel=String(b.model||(nextProvider===provider?model:providers[nextProvider].model)).trim(),nextEmbedding=String(b.embeddingModel||embeddingModel).trim();
+  if(!candidate)return json(res,400,{error:'선택한 서비스의 API 키가 필요합니다.'});
   if(candidate.length>1000||/[\r\n\0]/.test(candidate)||![nextModel,nextEmbedding].every(v=>/^[a-zA-Z0-9._:-]+$/.test(v)))throw new Error('API 키 또는 모델 형식을 확인하세요.');
-  const previous={key,model,embeddingModel};key=candidate;model=nextModel;embeddingModel=nextEmbedding;
-  try{await embeddings(['연결 확인']);await llm('연결 점검입니다. ok를 true로 반환하세요.',{},objectSchema({ok:{type:'boolean'}}));await persistAi();verifiedAt=new Date().toISOString()}catch(e){({key,model,embeddingModel}=previous);throw e}
+  const previous={provider,key,model,embeddingModel};provider=nextProvider;key=candidate;model=nextModel;embeddingModel=nextEmbedding;
+  try{await embeddings(['연결 확인']);const check=await llm('연결 점검입니다. ok를 true로 반환하세요.',{},objectSchema({ok:{type:'boolean'}}));if(check.ok!==true)throw new Error('AI 연결 응답을 확인할 수 없습니다.');await persistAi();verifiedAt=new Date().toISOString()}catch(e){({provider,key,model,embeddingModel}=previous);throw e}
   let indexError=null;try{rag.sync(state);for(const c of state.classes)await rag.indexVectors(c.id)}catch(e){indexError=e.message}
-  return json(res,200,{configured:true,verifiedAt,model,embeddingModel,rag:rag.status(selected),indexError});
+  return json(res,200,{configured:true,provider,baseUrl:providers[provider].baseUrl,verifiedAt,model,embeddingModel,rag:rag.status(selected),indexError});
  }
  if(['/api/teacher/worksheets/qr','/api/teacher/worksheets/identify'].includes(url.pathname)){
   if(!platform.auth(req,'teacher'))return json(res,401,{error:'교사 화면에서 접속해 주세요.'});
@@ -123,8 +124,9 @@ const server=http.createServer(async(req,res)=>{try{
    const output=await llm('교사용 학습지를 만드세요. 제공된 수업 자료만 근거로 학습 목표를 평가하는 문항을 만드세요. 각 문항은 서로 달라야 합니다. 3지선다는 options에 3개를 넣고 answer는 정답 번호 1,2,3 중 하나입니다. 다른 유형은 options를 빈 배열로 반환합니다. T/F는 참거짓을 판단할 평서문을 text에 쓰고 answer는 T 또는 F입니다. F이면 wrongPart에 틀린 구절, correction에 전체를 바르게 고친 문장을 작성하세요. T와 다른 유형의 wrongPart·correction은 빈 문자열입니다. 풀이 가능한 문제와 정답, 명확한 채점 기준을 포함하세요.',{...b,references},objectSchema({questions:{type:'array',items:qSchema}}));event('worksheet-generated',b,output);return json(res,200,output);
   }
   if(url.pathname==='/api/grade'){
-   if(!Array.isArray(b.questions)||!Array.isArray(b.answers))throw new Error('questions와 answers가 필요합니다.');
-   const output=await llm('학생 답안을 제공된 정답과 채점 기준으로 채점하세요. correct는 true, false, 판단이 어려우면 null입니다. 답안만으로 원인을 확정하지 말고 개념 부족 추정/단순 실수 추정/추가 확인 필요 중 하나를 reason으로 반환하세요. 정답의 reason은 빈 문자열입니다. 미작성 답안의 reason은 추가 확인 필요입니다. 숫자·단위와 허용되는 동치 표현을 확인하세요. T/F가 F인 문항은 판단, 틀린 부분, 고친 문장 세 항목을 모두 평가하세요. 판단만 맞고 수정 내용이 없으면 정답 처리하지 마세요. answers의 tfAnswer에 구조화된 학생 응답이 있을 수 있습니다. 모든 문항을 한 번씩 반환하세요.',b,objectSchema({items:{type:'array',items:objectSchema({questionId:str,answer:str,correct:{type:['boolean','null']},reason:str})}}));event('graded',b,output);return json(res,200,output);
+   const state=platform.load(),worksheet=state.worksheets.find(w=>w.id===b.worksheetId&&w.classId===b.classId);
+   if(!worksheet||!state.classes.find(c=>c.id===b.classId)?.students.some(s=>s.id===b.studentId))throw new Error('해당 반의 학습지와 학생을 선택하세요.');
+   const output={items:await gradeAnswers(llm,worksheet.questions,b.answers)};event('graded',b,output);return json(res,200,output);
   }
   if(url.pathname==='/api/tutor/turn'){
    if(!b.session||b.session.answers?.length>=3)throw new Error('유효한 학습 대화가 아닙니다.');
