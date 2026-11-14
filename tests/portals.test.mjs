@@ -1,0 +1,84 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import {fileURLToPath} from 'node:url';
+
+test('two portals share backend while keeping student data and assessment keys private',async t=>{
+ const root=fileURLToPath(new URL('..',import.meta.url));
+ const temp=await mkdtemp(path.join(tmpdir(),'thinkmate-test-'));
+ const allocator=net.createServer();await new Promise(r=>allocator.listen(0,'127.0.0.1',r));const port=allocator.address().port;await new Promise(r=>allocator.close(r));
+ let child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),THINKMATE_DATA_DIR:temp,TEACHER_PASSWORD:'integration-teacher',OPENAI_API_KEY:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ t.after(async()=>{if(child.exitCode===null){const ended=new Promise(r=>child.once('exit',r));child.kill();await ended;}await rm(temp,{recursive:true,force:true})});
+ await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(Error('Server startup timeout')),15000);child.stdout.on('data',data=>{if(data.toString().includes('SQLite ready')){clearTimeout(timeout);resolve()}});child.once('error',reject);child.once('exit',code=>{if(code)reject(Error('Server exited '+code))})});
+ const base=`http://localhost:${port}`;
+ async function call(route,{method='GET',cookie,body}={}){const headers={};if(cookie)headers.Cookie=cookie;if(body!==undefined)headers['Content-Type']='application/json';const r=await fetch(base+route,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});return {status:r.status,data:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]}}
+ assert.equal((await fetch(base+'/teacher')).status,200);assert.equal((await fetch(base+'/student')).status,200);
+ assert.equal((await call('/api/state')).status,401);
+ assert.equal((await call('/api/teacher/state')).status,401);
+ assert.equal((await call('/api/student/home')).status,401);
+ assert.equal((await call('/api/teacher/login',{method:'POST',body:{password:'wrong'}})).status,401);
+ const teacher=(await call('/api/teacher/login',{method:'POST',body:{password:'integration-teacher'}})).cookie;assert.ok(teacher);
+ const classroom=await call('/api/teacher/state',{cookie:teacher});assert.equal(classroom.status,200);assert.equal(classroom.data.state.classes[0].students.length,8);
+ for(const id of ['teacher-galaxy','teacher-joseon','teacher-circulation']){assert.ok(classroom.data.state.materials.some(m=>m.id===id));const pdf=await fetch(base+'/api/teacher/material-file?id='+id,{headers:{Cookie:teacher}});assert.equal(pdf.status,200);assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0,5).toString(),'%PDF-')}
+ const access=classroom.data.access.find(a=>a.studentId==='s1');assert.equal(access.code.length,12);
+ const student=(await call('/api/student/login',{method:'POST',body:{code:access.code}})).cookie;assert.ok(student);
+ const home=(await call('/api/student/home',{cookie:student})).data;assert.equal(home.student.name,'이준서');assert.equal(home.tasks[0].status,'ready');assert.ok(!JSON.stringify(home).includes('김하은'));assert.ok(!JSON.stringify(home).includes('rubric'));
+ assert.equal((await call('/api/teacher/state',{cookie:student})).status,401);
+ assert.equal((await call('/api/teacher/state',{method:'PUT',cookie:student,body:{state:{}}})).status,401);
+ const spoof=await call('/api/student/home?studentId=s0',{cookie:student});assert.equal(spoof.data.student.id,'s1');
+ assert.equal((await call('/api/student/sessions/start',{method:'POST',cookie:student,body:{worksheetId:'another-class'}})).status,403);
+ let session=(await call('/api/student/sessions/start',{method:'POST',cookie:student,body:{worksheetId:'w1',studentId:'s0'}})).data.session;assert.ok(session.id);assert.equal(session.check,null);
+ assert.equal((await call('/api/student/sessions/verify',{method:'POST',cookie:student,body:{worksheetId:'w1',sessionId:session.id,answer:'4 g/cm³'}})).status,400);
+ // The teacher snapshot is deliberately old: a student turn must survive its save.
+ const old=classroom.data;
+ session=(await call('/api/student/sessions/turn',{method:'POST',cookie:student,body:{worksheetId:'w1',sessionId:session.id,answer:'물질이 많아지면 밀도도 커질 것 같았어'}})).data.session;
+ old.state.classes[0].name='연동 확인반';
+ const saved=await call('/api/teacher/state',{method:'PUT',cookie:teacher,body:{state:old.state,teacherRevision:old.teacherRevision}});assert.equal(saved.status,200);
+ assert.equal((await call('/api/student/home',{cookie:student})).data.student.className,'연동 확인반');
+ assert.equal((await call('/api/student/home',{cookie:student})).data.tasks[0].session.turnCount,1);
+ for(const answer of ['둘 다 5니까 같아','질량과 부피가 같은 비율로 증가하기 때문이야'])session=(await call('/api/student/sessions/turn',{method:'POST',cookie:student,body:{worksheetId:'w1',sessionId:session.id,answer}})).data.session;
+ assert.equal(session.turnCount,3);assert.equal(session.phase,'check');assert.ok(session.check.text);assert.deepEqual(Object.keys(session.check),['text']);
+ assert.equal((await call('/api/student/sessions/turn',{method:'POST',cookie:student,body:{worksheetId:'w1',sessionId:session.id,answer:'네 번째 답'}})).status,400);
+ session=(await call('/api/student/sessions/verify',{method:'POST',cookie:student,body:{worksheetId:'w1',sessionId:session.id,answer:'4 g/cm³',correct:false}})).data.session;
+ assert.equal(session.verification.correct,true);assert.equal(session.phase,'complete');
+ const updated=(await call('/api/teacher/state',{cookie:teacher})).data;assert.equal(updated.state.sessions.s1.verification.correct,true);assert.equal(updated.state.sessions.s1.answers.length,3);
+ assert.equal(updated.state.sessions.s1.worksheetId,'w1');
+ const otherAccess=updated.access.find(a=>a.studentId==='s0');const other=(await call('/api/student/login',{method:'POST',body:{code:otherAccess.code}})).cookie;
+ assert.equal((await call('/api/student/home',{cookie:other})).data.tasks[0].session,null);
+ assert.equal((await call('/api/student/home',{cookie:other})).data.student.id,'s0');
+ const directTeacher=await call('/api/teacher/me');assert.equal(directTeacher.status,200);assert.ok(directTeacher.cookie);
+ assert.equal((await call('/api/teacher/state',{cookie:directTeacher.cookie})).status,200);
+ const directStudent=await call('/api/student/me');assert.equal(directStudent.status,200);assert.equal(directStudent.data.student.id,'s1');assert.ok(directStudent.cookie);
+ assert.equal((await call('/api/student/home',{cookie:directStudent.cookie})).data.student.id,'s1');
+ assert.ok(!(await (await fetch(base+'/teacher-entry.js')).text()).includes('type="password"'));
+ assert.ok(!(await (await fetch(base+'/student.js')).text()).includes('id="student-login"'));
+ // Digital T/F responses stay private and cannot bypass the correction requirement.
+ const tfState=(await call('/api/teacher/state',{cookie:teacher})).data;
+ tfState.state.worksheets.push({id:'tf-test',classId:home.student.classId,title:'T/F 확인',questions:[{id:'tf-q',type:'T/F',text:'밀도는 질량과 부피를 곱한 값이다.',answer:'F',wrongPart:'곱한',correction:'밀도는 질량을 부피로 나눈 값이다.',concept:'밀도',rubric:'세 항목 확인'}]});
+ assert.equal((await call('/api/teacher/state',{method:'PUT',cookie:teacher,body:{state:tfState.state,teacherRevision:tfState.teacherRevision}})).status,200);
+ const worksheet=(await call('/api/student/worksheet?worksheetId=tf-test',{cookie:student})).data;
+ assert.equal(worksheet.questions[0].answer,undefined);assert.equal(worksheet.questions[0].correction,undefined);assert.equal(worksheet.questions[0].rubric,undefined);
+ assert.equal((await call('/api/student/worksheet?worksheetId=foreign',{cookie:student})).status,403);
+ const submit=answers=>call('/api/student/worksheet/submit',{method:'POST',cookie:student,body:{worksheetId:'tf-test',studentId:'s0',answers}});
+ assert.equal((await submit([{questionId:'tf-q',tfAnswer:{judgment:'F'},correct:true}])).status,400);
+ assert.equal((await submit([{questionId:'tf-q',tfAnswer:{judgment:'T'},correct:true}])).data.correctCount,0);
+ assert.equal((await submit([{questionId:'tf-q',tfAnswer:{judgment:'F',wrongPart:'곱한',correction:'밀도는 질량을 부피로 나눈 값이다.'}}])).data.correctCount,1);
+ assert.equal((await submit([{questionId:'tf-q',tfAnswer:{judgment:'F',wrongPart:'곱셈',correction:'질량 / 부피'}}])).data.pendingCount,1);
+ const tfAfter=(await call('/api/teacher/state',{cookie:teacher})).data;
+ const tfResult=tfAfter.state.results.find(r=>r.worksheetId==='tf-test');assert.equal(tfResult.studentId,'s1');assert.equal(tfResult.items[0].tfAnswer.wrongPart,'곱셈');
+ assert.equal((await call('/api/teacher/state',{method:'PUT',cookie:teacher,body:{state:tfState.state,teacherRevision:tfState.teacherRevision}})).status,409);
+ await call('/api/student/logout',{method:'POST',cookie:student,body:{}});assert.equal((await call('/api/student/home',{cookie:student})).status,401);
+ const ragStatus=await call('/api/teacher/rag/status',{cookie:teacher});assert.equal(ragStatus.data.configured,false);assert.ok(ragStatus.data.rag.chunkCount>0);
+ const search=await call('/api/teacher/rag/search',{method:'POST',cookie:teacher,body:{classId:'class1',materialId:'m1',query:'밀도 질량 부피'}});assert.ok(search.data.results.length>0);assert.equal(search.data.results[0].materialId,'m1');assert.ok(search.data.results[0].page);
+ assert.equal((await call('/api/teacher/rag/search',{method:'POST',cookie:student,body:{query:'밀도'}})).status,401);
+ assert.equal((await call('/api/teacher/ai/connect',{method:'POST',cookie:teacher,body:{key:''}})).status,400);
+ const stopped=new Promise(r=>child.once('exit',r));child.kill();await stopped;
+ child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,PORT:String(port),THINKMATE_DATA_DIR:temp,TEACHER_PASSWORD:'integration-teacher',OPENAI_API_KEY:''},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Restart timeout')),10000);child.stdout.on('data',data=>{if(data.toString().includes('SQLite ready')){clearTimeout(timer);resolve()}});child.once('exit',code=>{if(code){clearTimeout(timer);reject(Error('Restart failed '+code))}})});
+ assert.equal((await call('/api/teacher/state',{cookie:teacher})).data.state.sessions.s1.verification.correct,true);
+
+});

@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import QRCode from 'qrcode';
+import jsQR from 'jsqr';
+import {PNG} from 'pngjs';
+import {createWorksheetQR,identifyWorksheet,worksheetIdentity} from '../worksheet-qr.mjs';
+const worksheet={id:'ws-123',classId:'class-a',title:'밀도 확인',questions:[{id:'q1',type:'단답형',text:'질량 60g, 부피 20cm³의 밀도는?',answer:'3 g/cm³',rubric:'숫자와 단위'}]};
+test('QR contains only worksheet identity and round-trips through an independent decoder',async()=>{const {payload,svg}=await createWorksheetQR(worksheet);assert.ok(svg.includes('<svg'));const image=PNG.sync.read(await QRCode.toBuffer(payload,{margin:4,scale:6,errorCorrectionLevel:'M'}));const decoded=jsQR(new Uint8ClampedArray(image.data),image.width,image.height);assert.equal(decoded.data,payload);assert.equal(identifyWorksheet({worksheets:[worksheet]},decoded.data,'class-a').worksheetId,'ws-123');assert.ok(!payload.includes(worksheet.questions[0].answer));assert.ok(!payload.includes('학생'));assert.ok(!payload.includes('localhost'))});
+test('same title does not merge distinct worksheets',()=>{const second={...worksheet,id:'ws-other'};const a=JSON.stringify(worksheetIdentity(worksheet)),b=JSON.stringify(worksheetIdentity(second));assert.notEqual(a,b);assert.equal(identifyWorksheet({worksheets:[worksheet,second]},b,'class-a').worksheetId,'ws-other')});
+test('unknown, foreign class, malformed and stale worksheet QR codes are rejected',()=>{const state={worksheets:[worksheet]},payload=JSON.stringify(worksheetIdentity(worksheet));assert.throws(()=>identifyWorksheet(state,payload,'class-b'),/다른 반/);assert.throws(()=>identifyWorksheet({worksheets:[]},payload,'class-a'),/등록되지/);assert.throws(()=>identifyWorksheet(state,'https://example.com','class-a'),/QR 코드/);assert.throws(()=>identifyWorksheet(state,JSON.stringify({app:'halsuisseo',v:99}),'class-a'),/QR 코드/);const edited={...worksheet,questions:[{...worksheet.questions[0],answer:'4'}]};assert.throws(()=>identifyWorksheet({worksheets:[edited]},payload,'class-a'),/수정 전/) });
