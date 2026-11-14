@@ -1,0 +1,8 @@
+import {readFileSync} from 'node:fs';
+const teachingMaterials=JSON.parse(readFileSync(new URL('./materials/catalog.json',import.meta.url),'utf8'));
+import {randomUUID} from 'node:crypto';
+export function createDemoState(){
+ const questions=[{id:'q1',type:'3지선다',concept:'질량과 밀도의 관계',text:'같은 물질의 질량과 부피가 모두 두 배가 되었습니다. 밀도는 어떻게 될까요?',options:['두 배가 된다','변하지 않는다','절반이 된다'],answer:'2',rubric:'질량과 부피가 같은 비율로 늘면 밀도는 일정하다.'},{id:'q2',type:'단답형',concept:'밀도 계산',text:'질량 60 g, 부피 20 cm³인 물체의 밀도는? 단위도 쓰세요.',answer:'3 g/cm³',rubric:'60÷20=3, g/cm³ 단위를 포함한다.'},{id:'q3',type:'빈칸 넣기',concept:'밀도 공식',text:'밀도는 (     )을 부피로 나눈 값입니다.',answer:'질량',rubric:'질량을 쓴다.'},{id:'q4',type:'서술형',concept:'질량과 밀도의 관계',text:'같은 재료의 작은 블록과 큰 블록의 밀도가 같은 이유는?',answer:'질량과 부피가 같은 비율로 증가하여 나눈 값이 일정하다.',rubric:'질량·부피의 비례와 밀도가 일정함을 설명한다.'}];
+ const students=['김하은','이준서','박서연','최민준','정수아','강도윤','윤지우','한예린'].map((name,i)=>({id:'s'+i,name,number:i+1}));
+ return {classes:[{id:'class1',name:'2학년 3반',subject:'과학',students}],classId:'class1',materials:[{id:'m1',classId:'class1',title:'물질의 특성 · 밀도',text:'밀도는 질량을 부피로 나눈 값이다. 같은 물질의 질량과 부피가 같은 비율로 늘어나면 밀도는 같다.',kind:'시연 자료',status:'시연 자료',date:'2026.11.13'},...teachingMaterials.map(m=>({...m,classId:'class1'}))],worksheets:[{id:'w1',classId:'class1',materialId:'m1',title:'물질의 특성, 밀도 이해하기',questions,source:'시연',date:'2026.11.13'}],results:students.slice(0,6).map((s,i)=>({id:randomUUID(),classId:'class1',worksheetId:'w1',studentId:s.id,items:questions.map((q,j)=>({questionId:q.id,answer:j===0?(i===1?'1':'2'):j===1?(i===3?'30 g/cm³':'3 g/cm³'):j===2?'질량':q.answer,correct:!(j===0&&i===1||j===1&&i===3),reason:j===0?'개념 부족 추정':j===1?'단순 실수 추정':''})),demo:true})),sessions:{},learningSessions:{},apiBase:''};
+}

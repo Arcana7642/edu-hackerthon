@@ -1,0 +1,10 @@
+.env
+data/
+*.tar.gz
+node_modules/
+outputs/
+
+.env.*
+!.env.example
+
+.openai/
